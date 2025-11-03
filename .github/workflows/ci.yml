@@ -1,0 +1,81 @@
+name: CI Workflow
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["*"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }}
+
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # Linux GNU
+          - name: linux-x64-gnu
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            command: cargo
+          # Linux MUSL
+          - name: linux-x64-musl
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            command: cross
+          # Android
+          - name: android-arm
+            runner: ubuntu-latest
+            target: aarch64-linux-android
+            command: cross
+          # Windows GNU
+          - name: win-x86_64-gnu
+            runner: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            command: cross
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        if: matrix.command == 'cross'
+        shell: bash
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary
+        run: ${{ matrix.command }} build --release --target ${{ matrix.target }}
+
+      - name: Create archive
+        if: startsWith(github.ref, 'refs/tags/')
+        id: archive
+        shell: bash
+        run: |
+          DIRECTORY="udpforwarder-${{ github.ref_name }}-${{ matrix.target}}"
+          mkdir "${DIRECTORY}"
+          cp target/${{ matrix.target }}/release/udpforwarder "${DIRECTORY}/"
+          7z a "${DIRECTORY}.zip" "${DIRECTORY}"
+          echo "path=${DIRECTORY}.zip" >> ${GITHUB_OUTPUT}
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.ref_name }} ${{ steps.archive.outputs.path }}
